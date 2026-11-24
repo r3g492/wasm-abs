@@ -55,8 +55,7 @@ three-phase dump/hold/build control, rear select-low, yaw-moment build-up delay 
 - `src/bridge.c`: calls the JS controller from C
 - `web/shell.html`: page UI; `web/abs_runtime.js`: compiles/validates user code; `web/abs_example.js`: example controller
 - `tests/`: headless run of every scenario in Node
-- `tools/make_car.py`: Blender script that builds the sedan and exports `assets/car_body.glb` and
-  `assets/car_wheel.glb` (`make car`, or run it from Blender's Python console). Its dimensions match `src/sim.h`.
+- `assets/`: car model (`car_body.glb`, `car_wheel.glb`); its dimensions match `src/sim.h`
 - `external/raylib`: raylib 6.2 (git submodule)
 - `docs/`: build output served by GitHub Pages
 

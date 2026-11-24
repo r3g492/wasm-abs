@@ -133,7 +133,7 @@ static void DrawSkids(void)
 }
 
 // ---------------------------------------------------------------------------
-// Car model (assets/*.glb from tools/make_car.py) with a small lit shader
+// Car model (assets/*.glb) with a small lit shader
 // ---------------------------------------------------------------------------
 static Model carBody, carWheel;
 static Shader carShader;
