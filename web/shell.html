@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>wasm-abs</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #181a21; color: #ccc; font-family: system-ui, sans-serif; }
+    body { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; }
+    canvas { display: block; max-width: 100vw; height: auto; outline: none; box-shadow: 0 8px 40px #0008; }
+    #status { font-size: 14px; opacity: .7; }
+  </style>
+</head>
+<body>
+  <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+  <div id="status">Loading…</div>
+  <script>
+    var Module = {
+      canvas: document.getElementById('canvas'),
+      setStatus: function (s) { document.getElementById('status').textContent = s; },
+      onRuntimeInitialized: function () { document.getElementById('status').textContent = ''; }
+    };
+  </script>
+  {{{ SCRIPT }}}
+</body>
+</html>
