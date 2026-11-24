@@ -5,9 +5,9 @@
 #define SIM_DT          0.0005      // physics step (s), 2 kHz
 #define SIM_CTRL_DT     0.005       // ABS controller period (s), 200 Hz
 #define SIM_TEL_DT      0.01        // telemetry sample period (s)
-#define SIM_TEL_MAX     4500        // 45 s of telemetry
-#define SIM_MAX_TIME    45.0        // braking timeout (s)
-#define SIM_SKID_MAX    3000        // skid mark points per wheel
+#define SIM_TEL_MAX     12500       // 125 s of telemetry
+#define SIM_MAX_TIME    120.0       // braking timeout (s)
+#define SIM_SKID_MAX    12000       // skid mark points per wheel (~1.8 km)
 
 // ABS controller I/O (float buffers shared with the JS bridge)
 enum {

@@ -3,6 +3,7 @@
 #   make serve  -> local preview on http://localhost:8000
 #   make test   -> headless run of all scenarios in Node with web/abs_example.js
 #                  (ABS_FILE=path/to/your_abs.js make test to try another controller)
+#   make car    -> regenerate assets/*.glb with Blender (BLENDER=path/to/blender)
 #   make clean
 
 CC          := emcc
@@ -22,10 +23,12 @@ WEB_JS    := $(OUT)/abs_runtime.js $(OUT)/abs_example.js
 
 RAYLIB_CFLAGS := -std=gnu99 -Os -Wall -DPLATFORM_WEB -DGRAPHICS_API_OPENGL_ES2
 APP_CFLAGS    := -std=gnu99 -O2 -Wall -I$(RAYLIB_SRC) -DPLATFORM_WEB
+ASSETS        := $(wildcard assets/*.glb)
 LDFLAGS       := -sUSE_GLFW=3 -sALLOW_MEMORY_GROWTH=1 -sEXPORTED_RUNTIME_METHODS=ccall \
-                 --shell-file web/shell.html
+                 --shell-file web/shell.html --preload-file assets
 
-.PHONY: all clean serve test
+.PHONY: all clean serve test car
+BLENDER ?= blender
 all: $(OUT)/index.html $(WEB_JS)
 
 $(BUILD)/raylib/%.o: $(RAYLIB_SRC)/%.c | $(BUILD)/raylib
@@ -34,7 +37,7 @@ $(BUILD)/raylib/%.o: $(RAYLIB_SRC)/%.c | $(BUILD)/raylib
 $(RAYLIB_LIB): $(RAYLIB_OBJS)
 	$(AR) rcs $@ $^
 
-$(OUT)/index.html: $(APP_SRC) $(HEADERS) $(RAYLIB_LIB) web/shell.html | $(OUT)
+$(OUT)/index.html: $(APP_SRC) $(HEADERS) $(RAYLIB_LIB) web/shell.html $(ASSETS) | $(OUT)
 	$(CC) $(APP_CFLAGS) $(APP_SRC) $(RAYLIB_LIB) $(LDFLAGS) -o $@
 
 $(OUT)/%.js: web/%.js | $(OUT)
@@ -50,8 +53,11 @@ test: $(BUILD)/headless.js
 $(BUILD) $(BUILD)/raylib $(OUT):
 	mkdir -p $@
 
+car:
+	ABS_REPO=$(CURDIR) $(BLENDER) -b -P tools/make_car.py
+
 serve: all
 	python3 -m http.server 8000 -d $(OUT)
 
 clean:
-	rm -rf $(BUILD) $(OUT)/index.html $(OUT)/index.js $(OUT)/index.wasm $(WEB_JS)
+	rm -rf $(BUILD) $(OUT)/index.html $(OUT)/index.js $(OUT)/index.wasm $(OUT)/index.data $(WEB_JS)

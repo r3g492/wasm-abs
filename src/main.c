@@ -77,30 +77,36 @@ static void DrawRect3D(double x0, double x1, double y0, double y1, double h, Col
     DrawTriangle3D(a, cc, d, c); DrawTriangle3D(a, d, cc, c);
 }
 
-#define ROAD_HALF 5.5
-#define ROAD_X0   -250.0
-#define ROAD_X1   450.0
+#define ROAD_HALF   5.5
+#define ROAD_BEHIND 300.0   // road drawn this far behind the car...
+#define ROAD_AHEAD  700.0   // ...and this far ahead, so it never ends on screen
 
 static void DrawWorld(void)
 {
     const Scenario *sc = &SCENARIOS[sim.scenario];
+    double x0 = floor((sim.x - ROAD_BEHIND)/9.0)*9.0;   // multiple of 9 keeps the dashes fixed in the world
+    double x1 = sim.x + ROAD_AHEAD;
+
     // Layers never overlap at the same height; overlays sit >= 3 cm above to avoid z-fighting
-    DrawPlane((Vector3){ 100, -0.08f, 0 }, (Vector2){ 900, 200 }, (Color){ 44, 70, 48, 255 });
+    DrawPlane((Vector3){ (float)(x0 + x1)/2, -0.08f, 0 }, (Vector2){ (float)(x1 - x0) + 200, 600 }, (Color){ 44, 70, 48, 255 });
     Color shoulder = (Color){ 90, 90, 90, 255 };
-    DrawRect3D(ROAD_X0, ROAD_X1, ROAD_HALF, ROAD_HALF + 0.6, 0.0, shoulder);
-    DrawRect3D(ROAD_X0, ROAD_X1, -ROAD_HALF - 0.6, -ROAD_HALF, 0.0, shoulder);
-    DrawRect3D(ROAD_X0, 0, -ROAD_HALF, ROAD_HALF, 0.0, SurfaceColor(SURF_DRY));
-    DrawRect3D(0, ROAD_X1, 0, ROAD_HALF, 0.0, SurfaceColor(sc->left));
-    DrawRect3D(0, ROAD_X1, -ROAD_HALF, 0, 0.0, SurfaceColor(sc->right));
+    DrawRect3D(x0, x1, ROAD_HALF, ROAD_HALF + 0.6, 0.0, shoulder);
+    DrawRect3D(x0, x1, -ROAD_HALF - 0.6, -ROAD_HALF, 0.0, shoulder);
+    if (x0 < 0) DrawRect3D(x0, fmin(0, x1), -ROAD_HALF, ROAD_HALF, 0.0, SurfaceColor(SURF_DRY));
+    if (x1 > 0) {
+        DrawRect3D(fmax(0, x0), x1, 0, ROAD_HALF, 0.0, SurfaceColor(sc->left));
+        DrawRect3D(fmax(0, x0), x1, -ROAD_HALF, 0, 0.0, SurfaceColor(sc->right));
+    }
 
     // Edge lines, centre dashes, brake line, 10 m ticks
     Color line = (Color){ 235, 235, 235, 255 };
-    DrawRect3D(ROAD_X0, ROAD_X1, ROAD_HALF - 0.15, ROAD_HALF, 0.03, line);
-    DrawRect3D(ROAD_X0, ROAD_X1, -ROAD_HALF, -ROAD_HALF + 0.15, 0.03, line);
-    for (double x = ROAD_X0; x < ROAD_X1; x += 9) DrawRect3D(x, x + 3, -0.06, 0.06, 0.03, line);
-    for (int k = 0; k < 11; k++)
-        DrawRect3D(0, 0.5, -ROAD_HALF + k, -ROAD_HALF + k + 1, 0.03, k % 2 ? RED : RAYWHITE);
-    for (int m = 10; m <= 400; m += 10) {
+    DrawRect3D(x0, x1, ROAD_HALF - 0.15, ROAD_HALF, 0.03, line);
+    DrawRect3D(x0, x1, -ROAD_HALF, -ROAD_HALF + 0.15, 0.03, line);
+    for (double x = x0; x < x1; x += 9) DrawRect3D(x, x + 3, -0.06, 0.06, 0.03, line);
+    if (x0 < 0.5 && x1 > 0)
+        for (int k = 0; k < 11; k++)
+            DrawRect3D(0, 0.5, -ROAD_HALF + k, -ROAD_HALF + k + 1, 0.03, k % 2 ? RED : RAYWHITE);
+    for (int m = (int)fmax(10, ceil(x0/10)*10); m <= x1; m += 10) {
         DrawRect3D(m - 0.08, m + 0.08, ROAD_HALF, ROAD_HALF + 0.6, 0.03, m % 50 ? LIGHTGRAY : YELLOW);
         DrawRect3D(m - 0.08, m + 0.08, -ROAD_HALF - 0.6, -ROAD_HALF, 0.03, m % 50 ? LIGHTGRAY : YELLOW);
     }
@@ -111,7 +117,7 @@ static void DrawSkids(void)
     for (int i = 0; i < 4; i++) {
         for (int k = 1; k < sim.skidCount[i]; k++) {
             SkidPoint *a = &sim.skid[i][k - 1], *b = &sim.skid[i][k];
-            if (b->start) continue;
+            if (b->start || b->x < sim.x - ROAD_BEHIND) continue;
             float dx = b->x - a->x, dy = b->y - a->y;
             float len = sqrtf(dx*dx + dy*dy);
             if (len < 1e-4f || len > 2.0f) continue;
@@ -126,40 +132,108 @@ static void DrawSkids(void)
     }
 }
 
-static int WheelInAbs(int i) { return sim.phase == PHASE_BRAKING && sim.p[i] < sim.pm - 5; }
+// ---------------------------------------------------------------------------
+// Car model (assets/*.glb from tools/make_car.py) with a small lit shader
+// ---------------------------------------------------------------------------
+static Model carBody, carWheel;
+static Shader carShader;
+static int viewPosLoc = -1;
+static Color *tailLight = NULL;     // taillight material colour, brightened while braking
+static Color tailLightOff;
+
+static const char *CAR_VS =
+    "#version 100\n"
+    "attribute vec3 vertexPosition;\n"
+    "attribute vec3 vertexNormal;\n"
+    "uniform mat4 mvp;\n"
+    "uniform mat4 matModel;\n"
+    "uniform mat4 matNormal;\n"
+    "varying vec3 fragPos;\n"
+    "varying vec3 fragNormal;\n"
+    "void main() {\n"
+    "    fragPos = vec3(matModel*vec4(vertexPosition, 1.0));\n"
+    "    fragNormal = normalize(vec3(matNormal*vec4(vertexNormal, 0.0)));\n"
+    "    gl_Position = mvp*vec4(vertexPosition, 1.0);\n"
+    "}\n";
+
+// Colours from glTF are linear: light in linear space, then gamma-encode.
+static const char *CAR_FS =
+    "#version 100\n"
+    "precision mediump float;\n"
+    "varying vec3 fragPos;\n"
+    "varying vec3 fragNormal;\n"
+    "uniform vec4 colDiffuse;\n"
+    "uniform vec3 viewPos;\n"
+    "void main() {\n"
+    "    vec3 n = normalize(fragNormal);\n"
+    "    vec3 L = normalize(vec3(-0.35, 0.85, 0.4));\n"
+    "    vec3 v = normalize(viewPos - fragPos);\n"
+    "    float d = max(dot(n, L), 0.0);\n"
+    "    vec3 amb = mix(vec3(0.08, 0.08, 0.07), vec3(0.30, 0.34, 0.40), 0.5 + 0.5*n.y);\n"
+    "    float spec = pow(max(dot(n, normalize(L + v)), 0.0), 60.0)*0.6;\n"
+    "    float fres = pow(1.0 - max(dot(n, v), 0.0), 4.0)*0.20;\n"
+    "    vec3 c = colDiffuse.rgb*(amb + d*vec3(1.05, 1.0, 0.92)) + vec3(spec) + fres*vec3(0.55, 0.65, 0.8);\n"
+    "    gl_FragColor = vec4(pow(c, vec3(1.0/2.2)), 1.0);\n"
+    "}\n";
+
+static void LoadCar(void)
+{
+    carShader = LoadShaderFromMemory(CAR_VS, CAR_FS);
+    carShader.locs[SHADER_LOC_MATRIX_MODEL] = GetShaderLocation(carShader, "matModel");
+    carShader.locs[SHADER_LOC_MATRIX_NORMAL] = GetShaderLocation(carShader, "matNormal");
+    viewPosLoc = GetShaderLocation(carShader, "viewPos");
+
+    carBody = LoadModel("assets/car_body.glb");
+    carWheel = LoadModel("assets/car_wheel.glb");
+    for (int i = 0; i < carBody.materialCount; i++) {
+        carBody.materials[i].shader = carShader;
+        Color *c = &carBody.materials[i].maps[MATERIAL_MAP_DIFFUSE].color;
+        if (c->r > 40 && c->r < 64 && c->g < 12 && c->b < 12) { tailLight = c; tailLightOff = *c; }
+    }
+    for (int i = 0; i < carWheel.materialCount; i++) carWheel.materials[i].shader = carShader;
+}
+
+static void DrawCarShadow(void)
+{
+    // Soft-ish contact shadow: two stacked translucent quads under the body
+    double c = cos(sim.psi), s = sin(sim.psi);
+    for (int k = 0; k < 2; k++) {
+        double hl = 2.25 + 0.15*k, hw = 0.92 + 0.10*k, cx = -0.1;
+        double px[4] = { cx + hl, cx + hl, cx - hl, cx - hl }, py[4] = { hw, -hw, -hw, hw };
+        Vector3 p[4];
+        for (int i = 0; i < 4; i++)
+            p[i] = W(sim.x + px[i]*c - py[i]*s, sim.y + px[i]*s + py[i]*c, 0.04 + 0.002*k);
+        Color col = { 0, 0, 0, (unsigned char)(k ? 35 : 55) };
+        DrawTriangle3D(p[0], p[2], p[1], col); DrawTriangle3D(p[0], p[3], p[2], col);
+    }
+}
 
 static void DrawCar(void)
 {
     const double WX[4] = { CAR_A, CAR_A, -CAR_B, -CAR_B };
     const double WY[4] = { CAR_TRACK/2, -CAR_TRACK/2, CAR_TRACK/2, -CAR_TRACK/2 };
 
+    DrawCarShadow();
+    rlDrawRenderBatchActive();      // flush the shadow before switching shaders
+
+    float vp[3] = { camera.position.x, camera.position.y, camera.position.z };
+    SetShaderValue(carShader, viewPosLoc, vp, SHADER_UNIFORM_VEC3);
+    if (tailLight) *tailLight = sim.pedal > 0.05 ? (Color){ 255, 20, 12, 255 } : tailLightOff;
+
     rlPushMatrix();
     rlTranslatef((float)sim.x, 0, (float)-sim.y);
     rlRotatef((float)(sim.psi*RAD2DEG), 0, 1, 0);
 
-    // Body (local: X forward, Z = right)
-    Color body = (Color){ 220, 60, 50, 255 };
-    DrawCube((Vector3){ (float)(CAR_A - CAR_B)/2, 0.62f, 0 }, 4.4f, 0.6f, 1.8f, body);
-    DrawCubeWires((Vector3){ (float)(CAR_A - CAR_B)/2, 0.62f, 0 }, 4.4f, 0.6f, 1.8f, (Color){ 120, 20, 20, 255 });
-    DrawCube((Vector3){ -0.35f, 1.15f, 0 }, 2.3f, 0.5f, 1.6f, (Color){ 40, 50, 70, 255 });
-    DrawCube((Vector3){ 2.0f, 0.62f, 0.6f }, 0.05f, 0.15f, 0.35f, (Color){ 255, 250, 210, 255 });
-    DrawCube((Vector3){ 2.0f, 0.62f, -0.6f }, 0.05f, 0.15f, 0.35f, (Color){ 255, 250, 210, 255 });
-    if (sim.pedal > 0.05) {
-        DrawCube((Vector3){ -2.42f, 0.7f, 0.65f }, 0.05f, 0.15f, 0.3f, RED);
-        DrawCube((Vector3){ -2.42f, 0.7f, -0.65f }, 0.05f, 0.15f, 0.3f, RED);
-    }
+    // Local frame: X forward, Y up, Z right (matches the glTF export)
+    DrawModel(carBody, (Vector3){ 0, 0, 0 }, 1.0f, WHITE);
 
     for (int i = 0; i < 4; i++) {
         rlPushMatrix();
         rlTranslatef((float)WX[i], (float)CAR_R, (float)-WY[i]);
         if (i < 2) rlRotatef((float)(sim.steer*RAD2DEG), 0, 1, 0);
         rlRotatef((float)(-sim.spin[i]*RAD2DEG), 0, 0, 1);
-        float side = WY[i] > 0 ? -1.0f : 1.0f;     // outward along local Z
-        DrawCylinderEx((Vector3){ 0, 0, -0.12f }, (Vector3){ 0, 0, 0.12f }, (float)CAR_R, (float)CAR_R, 18,
-                       (Color){ 25, 25, 28, 255 });
-        Color hub = sim.slip[i] < -0.5 ? RED : (WheelInAbs(i) ? ORANGE : (Color){ 200, 200, 200, 255 });
-        DrawCube((Vector3){ 0, 0, side*0.125f }, 0.5f, 0.08f, 0.02f, hub);
-        DrawCube((Vector3){ 0, 0, side*0.125f }, 0.08f, 0.5f, 0.02f, hub);
+        if (WY[i] < 0) rlRotatef(180, 0, 1, 0);    // rim faces outward on the right side too
+        DrawModel(carWheel, (Vector3){ 0, 0, 0 }, 1.0f, WHITE);
         rlPopMatrix();
     }
     rlPopMatrix();
@@ -169,8 +243,8 @@ static void UpdateCam(float dt)
 {
     Vector3 car = W(sim.x, sim.y, 0.6);
     // Chase camera: behind, above and slightly right of the car, looking ahead of it
-    Vector3 pos = { car.x - 15, 7.5f, car.z + 5.0f };
-    Vector3 tgt = { car.x + 10, 0, car.z };
+    Vector3 pos = { car.x - 11.5f, 5.0f, car.z + 4.0f };
+    Vector3 tgt = { car.x + 8, 0.3f, car.z };
     camera.up = (Vector3){ 0, 1, 0 };
     float k = dt <= 0 ? 1.0f : 1.0f - expf(-dt*6.0f);
     camPos.x += (pos.x - camPos.x)*k; camPos.y += (pos.y - camPos.y)*k; camPos.z += (pos.z - camPos.z)*k;
@@ -184,8 +258,7 @@ static void UpdateCam(float dt)
 // ---------------------------------------------------------------------------
 static void DrawDistanceLabels(void)
 {
-    for (int m = 10; m <= 400; m += 10) {
-        if (fabs(m - sim.x) > 70) continue;
+    for (int m = (int)fmax(10, ceil((sim.x - 70)/10)*10); m <= sim.x + 70; m += 10) {
         Vector3 p = W(m, -ROAD_HALF - 1.0, 0.05);
         Vector3 d = { p.x - camera.position.x, p.y - camera.position.y, p.z - camera.position.z };
         Vector3 f = { camera.target.x - camera.position.x, camera.target.y - camera.position.y, camera.target.z - camera.position.z };
@@ -219,7 +292,7 @@ static void DrawInfo(void)
     int wxs[4] = { cx - 34, cx + 22, cx - 34, cx + 22 };
     int wys[4] = { cy - 44, cy - 44, cy + 20, cy + 20 };
     for (int i = 0; i < 4; i++) {
-        double sl = -sim.slip[i]; if (sl < 0) sl = 0; if (sl > 1) sl = 1;
+        double sl = fabs(sim.slip[i]); if (sl > 1) sl = 1;
         Color c = ColorLerp(GREEN, RED, (float)fmin(1.0, sl/0.3));
         DrawRectangle(wxs[i], wys[i], 12, 24, c);
         int tx = i % 2 ? wxs[i] + 18 : wxs[i] - 80;
@@ -340,6 +413,7 @@ int main(void)
     for (int i = 0; i < SCENARIO_COUNT; i++)
         js_register_scenario(i, SCENARIOS[i].name, SCENARIOS[i].desc, SCENARIOS[i].v0Kmh);
 
+    LoadCar();
     SimReset(&sim, 0, 1, DRIVER_STRAIGHT, SCENARIOS[0].v0Kmh, BridgeAbs, NULL);
     UpdateCam(0);
 
