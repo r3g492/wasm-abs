@@ -82,13 +82,8 @@
           <button id="absOn" class="on">Your code</button><button id="absOff">Off</button></div>
         <div class="row"><label>Driver</label>
           <select id="driver"><option value="0">Holds wheel straight</option><option value="1">Counter-steers</option></select></div>
-        <div class="row"><label>Time</label>
-          <button data-ts="0.1">0.1×</button><button data-ts="0.25">0.25×</button><button data-ts="1" class="on">1×</button></div>
-        <div class="row"><label>Camera</label>
-          <button data-cam="0" class="on">Chase</button><button data-cam="1">Top</button><button data-cam="2">Side</button></div>
         <div class="row" style="margin-top:12px">
           <button id="run" class="primary">▶ Run</button>
-          <button id="batch">Compare all 5: off vs your ABS</button>
         </div>
       </div>
 
@@ -195,7 +190,7 @@
       var unstable = r.yaw > 15 || r.lat > 1.75;
       var tr = document.createElement('tr');
       function td(text, cls) { var c = document.createElement('td'); c.textContent = text; if (cls) c.className = cls; tr.appendChild(c); }
-      td(sc.name + (r.batch ? ' ·batch' : ''));
+      td(sc.name);
       td(r.fault ? 'FAULT' : (r.abs ? 'yours' : 'off'), r.fault ? 'bad' : '');
       td(r.driver ? 'steers' : 'straight');
       td(Math.round(r.v0) + ' km/h');
@@ -213,22 +208,6 @@
     $('absOn').onclick = function () { state.abs = 1; $('absOn').classList.add('on'); $('absOff').classList.remove('on'); run(); };
     $('absOff').onclick = function () { state.abs = 0; $('absOff').classList.add('on'); $('absOn').classList.remove('on'); run(); };
     $('driver').onchange = function () { state.driver = +this.value; run(); };
-    document.querySelectorAll('[data-ts]').forEach(function (b) {
-      b.onclick = function () {
-        document.querySelectorAll('[data-ts]').forEach(function (x) { x.classList.toggle('on', x === b); });
-        if (ready) call('app_set_timescale', [+b.dataset.ts]);
-      };
-    });
-    document.querySelectorAll('[data-cam]').forEach(function (b) {
-      b.onclick = function () {
-        document.querySelectorAll('[data-cam]').forEach(function (x) { x.classList.toggle('on', x === b); });
-        if (ready) call('app_set_camera', [+b.dataset.cam]);
-      };
-    });
-    $('batch').onclick = function () {
-      if (!ready || !compileCode()) return;
-      call('app_batch', [state.driver, 0]);   // each scene at its own default speed
-    };
     $('apply').onclick = function () { if (compileCode()) run(); };
     $('resetCode').onclick = function () {
       if (!confirm('Replace your code with the example controller?')) return;

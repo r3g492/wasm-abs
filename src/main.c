@@ -10,10 +10,8 @@
 #define SCREEN_H 640
 #define PLOT_H   190
 
-static Sim sim, batchSim;
+static Sim sim;
 static int running = 0;
-static int cameraMode = 0;
-static float timeScale = 1.0f;
 static double simAccum = 0;
 static int resultSent = 0;
 static Camera3D camera;
@@ -32,15 +30,15 @@ EM_JS(void, js_register_scenario, (int i, const char *name, const char *desc, do
 });
 
 EM_JS(void, js_on_result, (int sc, int absOn, int driver, double v0, double dist, double time,
-                           double yawDeg, double lat, int fault, int batch), {
+                           double yawDeg, double lat, int fault), {
     if (Module.onResult) Module.onResult({ scenario: sc, abs: !!absOn, driver: driver, v0: v0,
-        dist: dist, time: time, yaw: yawDeg, lat: lat, fault: !!fault, batch: !!batch });
+        dist: dist, time: time, yaw: yawDeg, lat: lat, fault: !!fault });
 });
 
-static void SendResult(const Sim *s, int batch)
+static void SendResult(const Sim *s)
 {
     js_on_result(s->scenario, s->absOn, s->driver, s->v0*3.6, s->dist, s->tBrake,
-                 s->maxYaw*RAD2DEG, s->maxLat, s->absFault, batch);
+                 s->maxYaw*RAD2DEG, s->maxLat, s->absFault);
 }
 
 EMSCRIPTEN_KEEPALIVE void app_run(int scenario, int absOn, int driver, float v0Kmh)
@@ -53,22 +51,6 @@ EMSCRIPTEN_KEEPALIVE void app_run(int scenario, int absOn, int driver, float v0K
     running = 1;
     simAccum = 0;
     resultSent = 0;
-}
-
-EMSCRIPTEN_KEEPALIVE void app_set_timescale(float s) { timeScale = s; }
-EMSCRIPTEN_KEEPALIVE void app_set_camera(int mode) { cameraMode = mode; }
-
-EMSCRIPTEN_KEEPALIVE void app_batch(int driver, float v0Override)
-{
-    for (int sc = 0; sc < SCENARIO_COUNT; sc++) {
-        for (int absOn = 0; absOn <= 1; absOn++) {
-            double v0 = v0Override > 0 ? v0Override : SCENARIOS[sc].v0Kmh;
-            BridgeAbsReset();
-            SimReset(&batchSim, sc, absOn, (DriverMode)driver, v0, BridgeAbs, NULL);
-            SimRunToEnd(&batchSim);
-            SendResult(&batchSim, 1);
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -186,16 +168,11 @@ static void DrawCar(void)
 static void UpdateCam(float dt)
 {
     Vector3 car = W(sim.x, sim.y, 0.6);
-    Vector3 pos, tgt = car;
+    // Chase camera: behind, above and slightly right of the car, looking ahead of it
+    Vector3 pos = { car.x - 15, 7.5f, car.z + 5.0f };
+    Vector3 tgt = { car.x + 10, 0, car.z };
     camera.up = (Vector3){ 0, 1, 0 };
-    switch (cameraMode) {
-        case 1:  pos = (Vector3){ car.x - 0.01f, 34, car.z }; camera.up = (Vector3){ 1, 0, 0 }; break;
-        case 2:  pos = (Vector3){ car.x + 2, 3.5f, car.z + 14 }; break;
-        default: pos = (Vector3){ car.x - 15, 7.5f, car.z + 5.0f }; tgt.x += 10; tgt.y = 0; break;
-    }
-    float k = 1.0f - expf(-dt*6.0f);
-    static int lastMode = -1;
-    if (lastMode != cameraMode || dt <= 0) { camPos = pos; camTarget = tgt; lastMode = cameraMode; k = 1; }
+    float k = dt <= 0 ? 1.0f : 1.0f - expf(-dt*6.0f);
     camPos.x += (pos.x - camPos.x)*k; camPos.y += (pos.y - camPos.y)*k; camPos.z += (pos.z - camPos.z)*k;
     camTarget = tgt;
     camera.position = camPos;
@@ -210,7 +187,6 @@ static void DrawDistanceLabels(void)
     for (int m = 10; m <= 400; m += 10) {
         if (fabs(m - sim.x) > 70) continue;
         Vector3 p = W(m, -ROAD_HALF - 1.0, 0.05);
-        if (cameraMode == 1) p = W(m, -ROAD_HALF - 1.2, 0.05);
         Vector3 d = { p.x - camera.position.x, p.y - camera.position.y, p.z - camera.position.z };
         Vector3 f = { camera.target.x - camera.position.x, camera.target.y - camera.position.y, camera.target.z - camera.position.z };
         if (d.x*f.x + d.y*f.y + d.z*f.z <= 0) continue;
@@ -234,7 +210,7 @@ static void DrawInfo(void)
     const char *absTxt = !sim.absOn ? "ABS OFF" : (sim.absFault ? "ABS FAULT: brakes unmodulated" : "ABS: your code");
     Color absCol = !sim.absOn ? GRAY : (sim.absFault ? RED : GREEN);
     DrawText(absTxt, 20, 110, 10, absCol);
-    DrawText(TextFormat("driver: %s   x%.2g", sim.driver ? "counter-steers" : "holds straight", timeScale), 20, 124, 10, GRAY);
+    DrawText(TextFormat("driver: %s", sim.driver ? "counter-steers" : "holds straight"), 20, 124, 10, GRAY);
 
     // Wheel status diagram
     int cx = SCREEN_W - 120, cy = 80;
@@ -327,7 +303,7 @@ static void Frame(void)
     if (dt > 0.05f) dt = 0.05f;
 
     if (running && sim.phase != PHASE_STOPPED) {
-        simAccum += dt*timeScale;
+        simAccum += dt;
         int steps = 0;
         while (simAccum >= SIM_DT && steps < 4000 && sim.phase != PHASE_STOPPED) {
             SimStep(&sim);
@@ -336,7 +312,7 @@ static void Frame(void)
         }
     }
     if (running && sim.phase == PHASE_STOPPED && !resultSent) {
-        SendResult(&sim, 0);
+        SendResult(&sim);
         resultSent = 1;
     }
     UpdateCam(dt);

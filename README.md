@@ -67,7 +67,7 @@ git clone --recurse-submodules https://github.com/r3g492/wasm-abs.git
 cd wasm-abs
 make            # builds docs/
 make serve      # preview at http://localhost:8000
-make test       # all scenarios, ABS off vs example, in Node
+make test       # all scenarios, ABS off vs example, headless in Node
 ABS_FILE=my_abs.js make test   # same with your controller
 ```
 
