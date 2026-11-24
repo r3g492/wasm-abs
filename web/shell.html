@@ -3,23 +3,256 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>wasm-abs</title>
+  <title>ABS Braking Lab</title>
   <style>
-    html, body { margin: 0; height: 100%; background: #181a21; color: #ccc; font-family: system-ui, sans-serif; }
-    body { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; }
-    canvas { display: block; max-width: 100vw; height: auto; outline: none; box-shadow: 0 8px 40px #0008; }
-    #status { font-size: 14px; opacity: .7; }
+    :root {
+      --bg: #0f1116; --panel: #171a21; --panel2: #1e222b; --line: #2b303b;
+      --text: #e6e8ee; --muted: #9098a8; --accent: #4dabf7; --good: #51cf66; --bad: #ff6b6b; --warn: #ffa94d;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+    header { padding: 14px 20px 6px; display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+    header h1 { margin: 0; font-size: 20px; }
+    header p { margin: 0; color: var(--muted); }
+    main { display: grid; grid-template-columns: minmax(0, 1024px) minmax(360px, 1fr); gap: 16px; padding: 10px 20px 24px; }
+    @media (max-width: 1100px) { main { grid-template-columns: minmax(0, 1fr); padding: 10px 16px 24px; } }
+    .stage canvas { display: block; width: 100%; height: auto; aspect-ratio: 1024 / 640; background: #000; border-radius: 8px; outline: none; }
+    #status { color: var(--muted); font-size: 12px; padding: 6px 2px; min-height: 22px; }
+    .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin-bottom: 12px; }
+    .card h2 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+    .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+    .row label { color: var(--muted); font-size: 12px; min-width: 64px; }
+    button, select, input[type=number] {
+      font: inherit; color: var(--text); background: var(--panel2); border: 1px solid var(--line);
+      border-radius: 6px; padding: 6px 10px; cursor: pointer;
+    }
+    input[type=number] { width: 80px; cursor: text; }
+    button:hover { border-color: #3d4452; }
+    button.on { background: #1c3a57; border-color: var(--accent); }
+    button.primary { background: var(--accent); color: #08131f; border-color: var(--accent); font-weight: 600; }
+    button.primary:hover { filter: brightness(1.08); }
+    .scenes { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; margin-bottom: 10px; }
+    .scenes button { text-align: left; padding: 8px 10px; }
+    .scenes button small { display: block; color: var(--muted); font-size: 11px; }
+    textarea {
+      width: 100%; min-height: 420px; resize: vertical; background: #0b0d12; color: #d7dae0;
+      border: 1px solid var(--line); border-radius: 6px; padding: 10px; tab-size: 2;
+      font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    #absMsg { font-size: 12px; margin-top: 6px; min-height: 18px; white-space: pre-wrap; }
+    #absMsg.ok { color: var(--good); } #absMsg.err { color: var(--bad); }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+    th, td { padding: 5px 6px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+    th:first-child, td:first-child { text-align: left; white-space: normal; }
+    th { color: var(--muted); font-weight: 500; }
+    td.bad { color: var(--bad); } td.good { color: var(--good); }
+    .hint { color: var(--muted); font-size: 12px; }
+    .tablewrap { overflow-x: auto; }
   </style>
 </head>
 <body>
-  <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
-  <div id="status">Loading…</div>
+  <header>
+    <h1>ABS Braking Lab</h1>
+    <p>raylib + WebAssembly vehicle sim. Write your own ABS controller in JavaScript and test it on 5 surfaces.</p>
+  </header>
+  <main>
+    <section class="stage">
+      <canvas id="canvas" width="1024" height="640" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+      <div id="status">Loading…</div>
+
+      <div class="card">
+        <h2>Results</h2>
+        <div class="tablewrap">
+          <table>
+            <thead><tr><th>Scene</th><th>ABS</th><th>Driver</th><th>Speed</th><th>Distance</th><th>Time</th><th>Max yaw</th><th>Max lateral</th></tr></thead>
+            <tbody id="results"></tbody>
+          </table>
+        </div>
+        <div class="row" style="margin-top:8px"><button id="clearRes">Clear</button>
+          <span class="hint">Yaw over 15° or lateral drift over 1.75 m (half a lane) counts as unstable.</span></div>
+      </div>
+    </section>
+
+    <section>
+      <div class="card">
+        <h2>Scenario</h2>
+        <div class="scenes" id="scenes"></div>
+        <div class="row"><label>Speed</label><input id="speed" type="number" min="10" max="200" step="5"> <span class="hint">km/h</span></div>
+        <div class="row"><label>ABS</label>
+          <button id="absOn" class="on">Your code</button><button id="absOff">Off</button></div>
+        <div class="row"><label>Driver</label>
+          <select id="driver"><option value="0">Holds wheel straight</option><option value="1">Counter-steers</option></select></div>
+        <div class="row"><label>Time</label>
+          <button data-ts="0.1">0.1×</button><button data-ts="0.25">0.25×</button><button data-ts="1" class="on">1×</button></div>
+        <div class="row"><label>Camera</label>
+          <button data-cam="0" class="on">Chase</button><button data-cam="1">Top</button><button data-cam="2">Side</button></div>
+        <div class="row" style="margin-top:12px">
+          <button id="run" class="primary">▶ Run</button>
+          <button id="batch">Compare all 5: off vs your ABS</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Your ABS controller</h2>
+        <textarea id="code" spellcheck="false" wrap="off"></textarea>
+        <div class="row" style="margin-top:8px">
+          <button id="apply" class="primary">Apply &amp; run</button>
+          <button id="resetCode">Reset to example</button>
+          <span class="hint">Ctrl/⌘ + Enter</span>
+        </div>
+        <div id="absMsg"></div>
+      </div>
+    </section>
+  </main>
+
   <script>
-    var Module = {
-      canvas: document.getElementById('canvas'),
-      setStatus: function (s) { document.getElementById('status').textContent = s; },
-      onRuntimeInitialized: function () { document.getElementById('status').textContent = ''; }
+    // Emscripten's GLFW listens for keys on the whole window and swallows Backspace/Tab.
+    // Keep those listeners away from the form fields so the editor works normally.
+    (function () {
+      var add = window.addEventListener;
+      window.addEventListener = function (type, fn, opts) {
+        if (/^key/.test(type) && typeof fn === 'function') {
+          var inner = fn;
+          fn = function (e) {
+            var t = e.target;
+            if (t && t.closest && t.closest('textarea, input, select, button')) return;
+            return inner.call(this, e);
+          };
+        }
+        return add.call(this, type, fn, opts);
+      };
+    })();
+  </script>
+  <script src="abs_runtime.js"></script>
+  <script>
+  // Everything lives in this closure: Emscripten's index.js declares globals (run, call...)
+  // that would otherwise overwrite ours.
+  (function () {
+    var $ = function (id) { return document.getElementById(id); };
+    var STORE_KEY = 'abs-lab-code-v1';
+    var scenarios = [], state = { scenario: 0, abs: 1, driver: 0 };
+    var exampleCode = '', ready = false, started = false;
+
+    function store(get, val) {
+      try { return get ? localStorage.getItem(STORE_KEY) : localStorage.setItem(STORE_KEY, val); } catch (e) { return null; }
+    }
+
+    function setMsg(text, cls) { var m = $('absMsg'); m.textContent = text; m.className = cls || ''; }
+
+    var runtime = AbsRuntime.create(function (msg) { setMsg(msg, 'err'); });
+
+    function compileCode() {
+      try { runtime.compile($('code').value); setMsg('Compiled OK.', 'ok'); store(false, $('code').value); return true; }
+      catch (e) { setMsg('Compile error: ' + e.message, 'err'); return false; }
+    }
+
+    var Module = window.Module = {
+      canvas: $('canvas'),
+      setStatus: function (s) { $('status').textContent = s; },
+      absStep: function (buf) { return runtime.step(buf); },
+      absReset: function () { runtime.reset(); },
+      onScenario: function (i, name, desc, v0) {
+        scenarios[i] = { name: name, desc: desc, v0: v0 };
+        if (i === 4) { buildScenes(); ready = true; setTimeout(maybeStart, 0); }
+      },
+      onResult: addResult
     };
+
+    function call(name, args) {
+      return Module.ccall(name, null, args.map(function () { return 'number'; }), args);
+    }
+
+    function buildScenes() {
+      var box = $('scenes'); box.innerHTML = '';
+      scenarios.forEach(function (sc, i) {
+        var b = document.createElement('button');
+        b.innerHTML = sc.name + '<small>' + sc.desc + ' · ' + sc.v0 + ' km/h</small>';
+        b.onclick = function () { selectScenario(i); run(); };
+        box.appendChild(b);
+      });
+      selectScenario(0);
+    }
+
+    function selectScenario(i) {
+      state.scenario = i;
+      $('speed').value = scenarios[i].v0;
+      Array.prototype.forEach.call($('scenes').children, function (b, k) { b.classList.toggle('on', k === i); });
+    }
+
+    function run() {
+      if (!ready) return;
+      if (state.abs) compileCode();
+      $('status').textContent = '';
+      call('app_run', [state.scenario, state.abs, state.driver, +$('speed').value || scenarios[state.scenario].v0]);
+    }
+
+    function maybeStart() {
+      if (ready && exampleCode && !started) { started = true; run(); }
+    }
+
+    function addResult(r) {
+      var sc = scenarios[r.scenario] || { name: '?' };
+      var unstable = r.yaw > 15 || r.lat > 1.75;
+      var tr = document.createElement('tr');
+      function td(text, cls) { var c = document.createElement('td'); c.textContent = text; if (cls) c.className = cls; tr.appendChild(c); }
+      td(sc.name + (r.batch ? ' ·batch' : ''));
+      td(r.fault ? 'FAULT' : (r.abs ? 'yours' : 'off'), r.fault ? 'bad' : '');
+      td(r.driver ? 'steers' : 'straight');
+      td(Math.round(r.v0) + ' km/h');
+      td(r.dist.toFixed(1) + ' m');
+      td(r.time.toFixed(2) + ' s');
+      td(r.yaw.toFixed(1) + '°', r.yaw > 15 ? 'bad' : '');
+      td(r.lat.toFixed(2) + ' m', r.lat > 1.75 ? 'bad' : '');
+      if (unstable) tr.title = 'Unstable: the car yawed or drifted out of its lane';
+      $('results').insertBefore(tr, $('results').firstChild);
+      while ($('results').children.length > 60) $('results').removeChild($('results').lastChild);
+    }
+
+    // --- Controls -----------------------------------------------------------
+    $('run').onclick = run;
+    $('absOn').onclick = function () { state.abs = 1; $('absOn').classList.add('on'); $('absOff').classList.remove('on'); run(); };
+    $('absOff').onclick = function () { state.abs = 0; $('absOff').classList.add('on'); $('absOn').classList.remove('on'); run(); };
+    $('driver').onchange = function () { state.driver = +this.value; run(); };
+    document.querySelectorAll('[data-ts]').forEach(function (b) {
+      b.onclick = function () {
+        document.querySelectorAll('[data-ts]').forEach(function (x) { x.classList.toggle('on', x === b); });
+        if (ready) call('app_set_timescale', [+b.dataset.ts]);
+      };
+    });
+    document.querySelectorAll('[data-cam]').forEach(function (b) {
+      b.onclick = function () {
+        document.querySelectorAll('[data-cam]').forEach(function (x) { x.classList.toggle('on', x === b); });
+        if (ready) call('app_set_camera', [+b.dataset.cam]);
+      };
+    });
+    $('batch').onclick = function () {
+      if (!ready || !compileCode()) return;
+      call('app_batch', [state.driver, 0]);   // each scene at its own default speed
+    };
+    $('apply').onclick = function () { if (compileCode()) run(); };
+    $('resetCode').onclick = function () {
+      if (!confirm('Replace your code with the example controller?')) return;
+      $('code').value = exampleCode; compileCode();
+    };
+    $('clearRes').onclick = function () { $('results').innerHTML = ''; };
+    $('code').addEventListener('keydown', function (e) {
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        var t = this, s = t.selectionStart, en = t.selectionEnd;
+        t.value = t.value.slice(0, s) + '  ' + t.value.slice(en);
+        t.selectionStart = t.selectionEnd = s + 2;
+      } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault(); $('apply').click();
+      }
+    });
+
+    fetch('abs_example.js').then(function (r) { return r.text(); }).then(function (txt) {
+      exampleCode = txt;
+      $('code').value = store(true) || txt;
+      compileCode();
+      maybeStart();
+    }).catch(function (e) { setMsg('Could not load the example controller: ' + e, 'err'); });
+  })();
   </script>
   {{{ SCRIPT }}}
 </body>

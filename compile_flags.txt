@@ -1,0 +1,6 @@
+-std=gnu99
+-DPLATFORM_WEB
+-Iexternal/raylib/src
+-I/opt/homebrew/opt/emscripten/libexec/cache/sysroot/include
+-target
+wasm32-unknown-emscripten
